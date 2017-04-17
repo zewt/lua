@@ -458,6 +458,15 @@ static void breaklabel (LexState *ls) {
 }
 
 /*
+** create a label named 'continue' to resolve continue statements
+*/
+static void continuelabel (LexState *ls, int pc) {
+  TString *n = luaS_new(ls->L, "continue");
+  int l = newlabelentry(ls, &ls->dyd->label, n, 0, pc);
+  findgotos(ls, &ls->dyd->label.arr[l]);
+}
+
+/*
 ** generates an error for an undefined 'goto'; choose appropriate
 ** message when label name is a reserved word (which can only be 'break')
 */
@@ -1190,6 +1199,8 @@ static void gotostat (LexState *ls, int pc) {
   int g;
   if (testnext(ls, TK_GOTO))
     label = str_checkname(ls);
+  else if (testnext(ls, TK_CONTINUE))
+    label = luaS_new(ls->L, "continue");
   else {
     luaX_next(ls);  /* skip break */
     label = luaS_new(ls->L, "break");
@@ -1252,6 +1263,7 @@ static void whilestat (LexState *ls, int line) {
   block(ls);
   luaK_jumpto(fs, whileinit);
   check_match(ls, TK_END, TK_WHILE, line);
+  continuelabel(ls, whileinit);
   leaveblock(fs);
   luaK_patchtohere(fs, condexit);  /* false conditions finish the loop */
 }
@@ -1259,7 +1271,7 @@ static void whilestat (LexState *ls, int line) {
 
 static void repeatstat (LexState *ls, int line) {
   /* repeatstat -> REPEAT block UNTIL cond */
-  int condexit;
+  int condexit, iter;
   FuncState *fs = ls->fs;
   int repeat_init = luaK_getlabel(fs);
   BlockCnt bl1, bl2;
@@ -1268,11 +1280,13 @@ static void repeatstat (LexState *ls, int line) {
   luaX_next(ls);  /* skip REPEAT */
   statlist(ls);
   check_match(ls, TK_UNTIL, TK_REPEAT, line);
+  iter = fs->pc; // continue jumps here
   condexit = cond(ls);  /* read condition (inside scope block) */
   if (bl2.upval)  /* upvalues? */
     luaK_patchclose(fs, condexit, bl2.nactvar);
   leaveblock(fs);  /* finish scope */
   luaK_patchlist(fs, condexit, repeat_init);  /* close the loop */
+  continuelabel(ls, iter);
   leaveblock(fs);  /* finish loop */
 }
 
@@ -1302,6 +1316,7 @@ static void forbody (LexState *ls, int base, int line, int nvars, int isnum) {
   block(ls);
   leaveblock(fs);  /* end of scope for declared variables */
   luaK_patchtohere(fs, prep);
+  continuelabel(ls, luaK_getlabel(fs));
   if (isnum)  /* numeric for? */
     endfor = luaK_codeAsBx(fs, OP_FORLOOP, base, NO_JUMP);
   else {  /* generic for */
@@ -1587,6 +1602,7 @@ static void statement (LexState *ls) {
       break;
     }
     case TK_BREAK:   /* stat -> breakstat */
+    case TK_CONTINUE: /* stat -> continuestat */
     case TK_GOTO: {  /* stat -> 'goto' NAME */
       gotostat(ls, luaK_jump(ls->fs));
       break;
